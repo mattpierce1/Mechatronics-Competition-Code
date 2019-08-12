@@ -1,0 +1,149 @@
+/*
+* GccApplication2.c
+*
+* Created: 11/19/2018 3:20:36 PM
+* Author : CIT-Labs
+*/
+#define F_CPU 16000000UL
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+#include "serial.h"
+volatile int period;
+int sweepDirection = 1; // 1 is right
+int changeDirection = 0; // 0 is default, determines how the robot turns
+
+// pin change interrupt triggering when the color sensor input has a logical change
+// if rising edge --> sent your period equal the value of timer0
+// if falling edge --> set value of timer0 to 0
+ISR(PCINT0_vect){
+  if (PINB & 0b00010000){
+    period = TCNT0;
+  }
+  else{
+    TCNT0 = 0;
+  }
+ }
+
+ISR(PCINT2_vect){ // interrupt triggering on QTI inputs
+  if ((PIND & 0b11000000)||(PIND & 0b10000000)||(PIND & 0b01000000)) {
+    if(sweepDirection){
+      PORTB &= 0b11110000; //stop
+      PORTB |= 0b00000110; //backwards
+      PORTD |= 0b00100000; // change paddle side
+      _delay_ms(750); //wait
+      PORTB &= 0b11110000; //stop backward
+      _delay_ms(2000);
+      PORTD &= 0b11011111; //stop paddle
+    }
+    else{
+      PORTB &= 0b11110000; //stop
+      PORTB |= 0b00000110; //backwards
+      PORTD |= 0b00010000; //change paddle side
+      _delay_ms(750);
+      PORTB &= 0b11110000; //stop backwards
+      _delay_ms(2000);
+      PORTD &= 0b11101111; //stop paddle
+    }
+    changeDirection = 1; // reports that the robot has turned around
+  }
+}
+
+// function created for lab 5
+// initializes all of our registers/interrupts
+void initColor(){
+  sei();
+  PCICR |= 0b00000101; // turns on interrupts for 1st and 3rd pin "blocks"
+  PCMSK2 |= 0b11000000; // turns on interrupts for pins 6 and 7 (QTI)
+  DDRB |= 0b00001111; // motor outputs(8-11) and color input (12)
+  DDRD |= 0b00110000; // paddle servo outputs (3,4)
+  DDRD &= 0b00111111; // QTI sensors (6,7) inputs
+  TCCR0B |= 0b00000010; // Sets prescaler of 8 to timer0
+}
+
+//function created for lab 5
+// turns on interrupt for color sensor pin 12 briefly
+// reutrns value determined by ISR
+int getColor(){
+  PCMSK0 |= 0b00010000;
+  _delay_ms(10);
+  PCMSK0 &= 0b11101111;
+  return period;
+}
+
+// function which contains all of the logic for turning around
+// called by main function once on opponent side
+//1 if right, 0 is left
+int turnAround(){
+  _delay_ms(1250);
+  PORTB &= 0b11110000; //stop
+  PORTB |= 0b00000110; //backwards
+  _delay_ms(4000); //wait
+  PORTB &= 0b11110000; //stop
+  if (sweepDirection) {
+    PORTB |= 0b00001010; //turn right
+  }
+  else {
+    PORTB |= 0b000000101; //turn left
+  }
+  _delay_ms(730);
+  PORTB &= 0b11110000; //stop
+  PORTB |= 0b00001001; //continue
+  _delay_ms(2000);
+  PORTB &= 0b11110000; //stop
+  if (sweepDirection) {
+    PORTB |= 0b00000101; //turn left
+  }
+  else {
+    PORTB |= 0b00001010; //turn right
+  }
+  _delay_ms(730);
+  PORTB &= 0b11110000; //stop
+  // toggles sweepDirection variable, which dictates how the robot turns
+  if (changeDirection) {
+    if (sweepDirection == 1) {
+      sweepDirection = 0;
+    }
+    else {
+      sweepDirection = 1;
+    }
+    changeDirection = 0;
+  }
+}
+
+// main function
+int main(void){
+  init_uart();
+  initColor();
+  int color = 0;
+  int turnColor;
+  int startColor = getColor(); //determine starting color
+  if (startColor < 100) { //starting on yellow
+    turnColor = 200; //blue
+  }
+  else if (startColor > 100) { // starting on blue
+    turnColor = 100; //yellow
+  }
+  int black = 500; // value for black border
+  PORTB |= 0b00001001; // drive forward
+  PORTD |= 0b00010000; // deploy paddle
+  _delay_ms(2000);
+  PORTD &= 0b11101111; //stop
+  
+  while (1){
+    PORTB |= 0b00001001;
+    //read current color
+    color = getColor();
+    if (turnColor == 200) { //if starting on yellow
+      if((uint16_t)color > turnColor && (uint16_t)color < black){
+        //if color sensor reads that its on blue, but not black
+        turnAround(); //turn around
+      }
+    }
+    else if (turnColor == 100 ) { //if starting on blue
+      if((uint16_t)color < turnColor){ //if color sensor is on yellow
+        turnAround(); //turn around
+      }
+    }
+  }
+}
